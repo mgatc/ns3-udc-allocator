@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
- * Copyright (c) 2007 INRIA
+ * Copyright (c) 2021
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -15,7 +15,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
- * Author: Mathieu Lacage <mathieu.lacage@sophia.inria.fr>
+ * Author: Matthew Graham <mattgrahamatc@gmail.com>
  */
 #include "udc-allocator.h"
 
@@ -28,22 +28,17 @@
 #include "ns3/vector.h"
 #include "ns3/mobility-model.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <unordered_set>
 #include <utility>
 
 #include <CGAL/squared_distance_3.h>
 
 namespace ns3 {
-
-
-//
-// This is the start of where I have been adding
-// implementation code for the UDCPositionAllocator.
-// The current algorithm is by Ghosh et al.
-//
 
 NS_OBJECT_ENSURE_REGISTERED (UDCPositionAllocator);
 
@@ -53,6 +48,12 @@ struct pair_hash {
     }
 };
 
+struct sortByX {
+	template<typename Point>
+	bool operator()(const Point &p1, const Point &p2) {
+		return p1.x() < p2.x();
+	}
+};
 inline bool
 isEven(int n) {
     return (n % 2 == 0);
@@ -64,16 +65,16 @@ isPresent(const std::unordered_set<std::pair<int,int>, pair_hash> &table, const 
 }
 
 bool
-operator!= (const Vector& l, const Vector& r) {
-	return l.x == r.y && l.y == r.y && l.z == r.z;
+operator== (const Vector& l, const Vector& r) {
+	return l.x == r.x && l.y == r.y && l.z == r.z;
 }
 
-UDCPositionAllocator::Point_3
+inline UDCPositionAllocator::Point_3
 CreatePointFromVector (const Vector& v) {
 	return UDCPositionAllocator::Point_3(v.x,v.y,v.z);
 }
 
-double
+inline double
 UDCPositionAllocator::SquaredDistance (const Vector& l, const Vector& r) {
 	return CGAL::squared_distance(
 			CreatePointFromVector (l),
@@ -93,6 +94,12 @@ UDCPositionAllocator::GetTypeId (void)
 }
 
 void
+UDCPositionAllocator::SetAlgorithm (int method)
+{
+	m_method = Algorithm(method);
+}
+
+void
 UDCPositionAllocator::SetSites (NodeContainer c)
 {
 	NodeContainer::Iterator i = c.Begin ();
@@ -109,6 +116,8 @@ UDCPositionAllocator::SetSites (NodeContainer c)
 	m_sites.reserve (c.GetN());
 	using std::min;
 	using std::max;
+	using std::cout;
+
 
 	for ( ; i != c.End (); ++i)
 	{
@@ -134,11 +143,34 @@ void
 UDCPositionAllocator::CoverSites ( double radius )
 {
   m_radius = radius;
-  FastUDC(radius);
+  switch(m_method) {
+  case Algorithm::SWEEP:
+	  BLMS (radius);
+	  break;
+  case Algorithm::STRIPS:
+	  LL (radius);
+	  break;
+  case Algorithm::FAST_COVER:
+  default:
+	  FastCover (radius);
+  }
 }
 void
-UDCPositionAllocator::FastUDC (double radius) {
-	// see https://link.springer.com/content/pdf/10.1007%2F978-3-030-34029-2_10.pdf
+UDCPositionAllocator::FastCover (double radius) {
+	/*
+	 * Code and algorithm from
+	 *
+	 * Ghosh, A., Hicks, B., Shevchenko, R. (2017):
+	 * Unit Disk Cover for Massive Point Sets.
+	 * In: Kotsireas I., Pardalos P., Parsopoulos
+	 * K., Souravlias D., Tsokas A. (eds) Analysis
+	 * of Experimental Algorithms. SEA 2019.
+	 * Lecture Notes in Computer Science, vol
+	 * 11544. Springer, Cham.
+	 * https://doi.org/10.1007/978-3-030-34029-2_10.
+	 */
+	using std::cout;
+
     std::unordered_set< std::pair<int,int>, pair_hash> hashTableForLatticeDiskCenters;
     const double sqrt2 = std::sqrt(2);
     const double gridWidth = sqrt2 * radius;
@@ -182,8 +214,194 @@ UDCPositionAllocator::FastUDC (double radius) {
             continue;
 
         hashTableForLatticeDiskCenters.insert(std::pair<int,int>(vertical,horizontal));
-        Add (Vector(verticalTimesGridWidth+additiveFactor, horizontalTimesGridWidth+additiveFactor, m_defaultHeight));
+        Vector diskCenter (verticalTimesGridWidth+additiveFactor,
+        		           horizontalTimesGridWidth+additiveFactor,
+						   m_defaultHeight);
+        Add (diskCenter);
+        //cout<<diskCenter<<"\n";
     }
+}
+void
+UDCPositionAllocator::BLMS (double radius) {
+	/*
+	 * Algorithm from
+	 *
+	 * Biniaz, A., Liu, P., Maheshwari, A., Smid, M.:
+	 * Approximation algorithms for the unit disk cover
+	 * problem in 2D and 3D. Comput. Geom. 60, 8–18 (2017).
+	 *
+	 * Code adapted from
+	 *
+	 * Ghosh, A., Hicks, B., Shevchenko, R. (2017):
+	 * Unit Disk Cover for Massive Point Sets.
+	 * In: Kotsireas I., Pardalos P., Parsopoulos
+	 * K., Souravlias D., Tsokas A. (eds) Analysis
+	 * of Experimental Algorithms. SEA 2019.
+	 * Lecture Notes in Computer Science, vol
+	 * 11544. Springer, Cham.
+	 * https://doi.org/10.1007/978-3-030-34029-2_10.
+	 */
+
+	const double radius_squared = pow( radius, 2 );
+
+	typedef std::vector<Point_2> PointContainer;
+	typedef PointContainer::iterator PointIterator;
+
+	// Sort all points on x-coordinate
+	PointContainer P;
+	P.reserve(m_sites.size());
+	for( auto v : m_sites ) {
+		P.emplace_back( v.x, v.y );
+	}
+	std::sort( P.begin(), P.end(), [] ( const Point_2 &lhs, const Point_2 &rhs ) {
+		return lhs.x() < rhs.x();
+	});
+
+	// Create the BST
+	auto YItSorter = []( const PointIterator &lhs, const PointIterator &rhs ) {
+		return lhs->y() < rhs->y();
+	};
+    std::set<PointIterator,decltype(YItSorter)> BST(YItSorter); // the binary tree of y-sorted disks
+
+    // Predicate to tell if a point is covered by a disk
+	auto isCovered = [&]( const Point_2& p, const Point_2& q ) {
+	    return CGAL::squared_distance( p, q ) < radius_squared;
+	};
+
+	for( auto sit=P.begin(), dit=P.begin(); sit<P.end(); sit++ ) {
+		// Handle deletions
+		while( dit->x() + radius < sit->x() ) {
+			BST.erase(dit);
+			dit++;
+		}
+
+		// Handle site
+		auto p_plus = BST.lower_bound(sit),
+			 pos(p_plus); // one higher than the site (p+)
+
+		bool siteIsCovered = false;
+
+		while( pos != BST.end() && (*pos)->y() - sit->y() < radius && !siteIsCovered ) {
+			siteIsCovered = isCovered( *sit, **pos );
+			pos++;
+		}
+		pos = p_plus;
+
+		while( !siteIsCovered && pos != BST.begin() && sit->y() - (*--pos)->y() < radius ) {
+			siteIsCovered = isCovered( *sit, **pos );
+		}
+
+		if( !siteIsCovered ) {
+			// add disk centers to C
+	        Add (Vector( sit->x(), sit->y(), m_defaultHeight ));
+			BST.insert(sit); // insert the Point into the BST
+		}
+
+	}
+}
+void
+UDCPositionAllocator::LL (double radius) {
+	/*
+	 * Algorithm from
+	 *
+	 * Liu, P., Lu, D.: A fast 25/6-approximation for the
+	 * minimum unit disk cover problem. arXiv preprint
+	 * arXiv:1406.3838 (2014).
+	 *
+	 * Code adapted from
+	 *
+	 * Ghosh, A., Hicks, B., Shevchenko, R. (2017):
+	 * Unit Disk Cover for Massive Point Sets.
+	 * In: Kotsireas I., Pardalos P., Parsopoulos
+	 * K., Souravlias D., Tsokas A. (eds) Analysis
+	 * of Experimental Algorithms. SEA 2019.
+	 * Lecture Notes in Computer Science, vol
+	 * 11544. Springer, Cham.
+	 * https://doi.org/10.1007/978-3-030-34029-2_10.
+	 */
+
+	using std::list;
+	using std::vector;
+
+	typedef std::vector<Point_2> PointContainer;
+	//typedef PointContainer::iterator PointIterator;
+
+	// Sort all points on x-coordinate
+	PointContainer P;
+	P.reserve(m_sites.size());
+	for( auto v : m_sites ) {
+		P.emplace_back( v.x, v.y );
+	}
+
+	const long double sqrt3TimesRadius = std::sqrt(3)*radius, sqrt3TimesRadiusOver2 = sqrt3TimesRadius/2;
+	unsigned answer = P.size()+1;
+	sort(P.begin(),P.end(),sortByX());
+	list<Point_2> C;
+
+
+	for(unsigned i = 0; i < 6; i++) {
+
+		unsigned current = 0;
+		long double rightOfCurrentStrip = P[0].x()  + ((i*sqrt3TimesRadius)/6);
+		list<Point_2> tempC;
+
+		while( current < P.size() ) {
+
+			if(P[current].x() > rightOfCurrentStrip) {
+				int jump = (P[current].x() - rightOfCurrentStrip) / sqrt3TimesRadius;
+				rightOfCurrentStrip += jump*sqrt3TimesRadius;
+
+				if(jump > 0)
+					continue;
+			}
+
+			unsigned indexOfTheFirstPointInTheCurrentStrip = current;
+
+			while(P[current].x() < rightOfCurrentStrip && current < P.size())
+				current++;
+
+
+			vector<Segment_2> segments;
+			segments.reserve(current-indexOfTheFirstPointInTheCurrentStrip+1);
+			long double xOfRestrictionline = rightOfCurrentStrip - sqrt3TimesRadiusOver2;
+
+			for(unsigned j = indexOfTheFirstPointInTheCurrentStrip; j < current; j++) {
+				long double distanceFromRestrictionLine = P[j].x()-xOfRestrictionline;
+				long double y = std::sqrt(pow(radius,2)-( distanceFromRestrictionLine*distanceFromRestrictionLine));
+				segments.emplace_back( Point_2(xOfRestrictionline,P[j].y()+y), Point_2(xOfRestrictionline,P[j].y()-y) );
+			}
+
+			rightOfCurrentStrip += sqrt3TimesRadius;
+
+			if(segments.size() == 0)
+				continue;
+
+			sort(segments.begin(),segments.end(), [](const Segment_2& si, const Segment_2& sj) { return (si.target().y() > sj.target().y());});
+
+			long double lowestY = segments[0].target().y();
+
+			for( unsigned k = 1; k < segments.size(); k++) {
+				if( segments[k].source().y() < lowestY ) {
+					tempC.emplace_back(xOfRestrictionline,lowestY);
+					lowestY = segments[k].target().y();
+				}
+			}
+			tempC.emplace_back(xOfRestrictionline,lowestY);
+		}
+
+	   //cout << tempC.size() << endl;
+
+		if( tempC.size() < answer) {
+			answer = tempC.size();
+			std::swap(C,tempC);
+		}
+	}
+	using std::cout;
+	cout<<"\n";
+	for( Point_2 p : C ) {
+        Add (Vector( p.x(), p.y(), m_defaultHeight ));
+        cout<<p<<"\n";
+	}
 }
 
 void
@@ -204,7 +422,7 @@ UDCPositionAllocator::Print()
     // Print origin
     //fprintf(fp,"\\draw [fill=white,stroke=green] (0,0) circle [radius=%f];\n",radiusOfPoints);
 
-    const double ResultantDimension = 100;
+    const double ResultantDimension = 20;
 
     double ResizeFactor = ResultantDimension
     			 	 	     / max (m_bounds[1].x-m_bounds[0].x,
@@ -213,16 +431,24 @@ UDCPositionAllocator::Print()
 
     const double RadiusOfPoints = 0.005*ResultantDimension;
 
-    for(Vector p : m_sites)
-        fprintf(fp, "\\draw [fill=black,stroke=black] (%f,%f) circle [radius=%f];\n",
-        		p.x*ResizeFactor, p.y*ResizeFactor, RadiusOfPoints);
-
     for(Vector p : m_positions){
         //fprintf (fp, "\\draw [fill=red,stroke=red] (%f,%f) circle [radius=%f];\n",
     	//        p.x, p.y, RadiusOfPoints);
-        fprintf (fp, "\\draw (%f,%f) circle [radius=%f];\n",
+        fprintf (fp, "\\draw [color=red!60, fill=red, fill opacity=0.05](%f,%f) circle [radius=%f];\n",
         		 p.x*ResizeFactor, p.y*ResizeFactor, m_radius*ResizeFactor);
     }
+
+    for(Vector p : m_sites)
+        fprintf (fp, "\\draw [color=blue, fill=blue!63] (%f,%f) circle [radius=%f];\n",
+        		p.x*ResizeFactor, p.y*ResizeFactor, RadiusOfPoints);
+
+    double scaleStartX = (m_bounds[1].x - 2*m_radius)*ResizeFactor,
+    	   scaleLabelX = scaleStartX + m_radius*ResizeFactor,
+    	   scaleEndX   = scaleLabelX + m_radius*ResizeFactor,
+		   scaleY	   = (m_bounds[1].y)*ResizeFactor + 0.5;
+    string scaleLabel = std::to_string(int(2*m_radius)) + "m";
+    fprintf (fp, "\\draw [|-|, ultra thick](%f,%f) -- (%f,%f) node[anchor=north]{%s} -- (%f,%f) ;\n",
+    		scaleStartX,scaleY,scaleLabelX,scaleY, scaleLabel.c_str(), scaleEndX,scaleY);
 
     fprintf (fp, "\n\n\\end{tikzpicture}");
     fprintf (fp, "\n\n\\end{document}");
@@ -242,6 +468,13 @@ UDCPositionAllocator::Add (Vector v)
 {
   m_positions.push_back (v);
   m_current = m_positions.begin ();
+
+  m_bounds[0].x = std::min (m_bounds[0].x, v.x-m_radius);
+  m_bounds[0].y = std::min (m_bounds[0].y, v.y-m_radius);
+  m_bounds[0].z = std::min (m_bounds[0].z, v.z-m_radius);
+  m_bounds[1].x = std::max (m_bounds[1].x, v.x+m_radius);
+  m_bounds[1].y = std::max (m_bounds[1].y, v.y+m_radius);
+  m_bounds[1].z = std::max (m_bounds[1].z, v.z+m_radius);
 }
 
 Vector

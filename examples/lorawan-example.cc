@@ -41,18 +41,23 @@ using namespace lorawan;
 NS_LOG_COMPONENT_DEFINE ("UDCLorawanExample");
 
 // Network settings
-double simulationTime = 600;
+double simulationTime = 3600;
 
 // Channel model
-bool realisticChannelModel = false;
+bool realisticChannelModel = true;
 
-int appPeriodSeconds = 600;
+int appPeriodSeconds = 300;
+size_t packetSize = 128;
 
 // Output control
 bool print = true;
 
-double radius = 100; // Presumed coverage radius of the gateways
+double radius = 10000; // Presumed coverage radius of the gateways
 int nDevices = 100; // Number of end devices to include
+unsigned long long bbox = 100000;
+
+int algorithm = 0;
+std::string edPositionFilename = "";
 
 
 int
@@ -64,8 +69,12 @@ main (int argc, char *argv[])
   //
 
   CommandLine cmd;
+  cmd.AddValue ("algorithm", "The Unit Disk Cover approximation algorithm to use", algorithm);
+  cmd.AddValue ("file", "The file representing end devices locations.", edPositionFilename);
   cmd.AddValue ("n", "Number of end devices to include in the simulation", nDevices);
+  cmd.AddValue ("box", "The variance of the randomly generated device positions", bbox);
   cmd.AddValue ("radius", "The radius of the presumed coverage area of each GW", radius);
+  cmd.AddValue ("packetSize", "The size of the packets to send", packetSize);
   cmd.AddValue ("simulationTime", "The time for which to simulate", simulationTime);
   cmd.AddValue ("appPeriod",
                 "The period in seconds to be used by periodically transmitting applications",
@@ -161,24 +170,36 @@ main (int argc, char *argv[])
    *  Create End Devices  *
    ************************/
 
-  // Here, we get the end-devices locations from file,
-  // then "cover" these devices with the gateways placed
-  // by the UDCPositionAllocators (not yet fully
-  // operational), see position-allocator.h and
-  // position-allocator.cc. Once this allocator is
-  // functional, we can it will be used as shown.
-  //
-
-  std::string edPositionFile = "n1000a50ed.txt";
-
-  // Create an ED position allocator and read from file
-  Ptr<ListPositionAllocator> edPosition = CreateObject<ListPositionAllocator> ();
-  edPosition->Add (edPositionFile, z, ' '); // read points from file
-  std::cout << "Added " << edPosition->GetSize() << " end devices from file.\n";
-
   // edMobility
   MobilityHelper edMobility;
-  edMobility.SetPositionAllocator (edPosition);
+
+  if( !edPositionFilename.empty() ) {
+	  Ptr<ListPositionAllocator> edList = CreateObject<ListPositionAllocator>();
+	  edList->Add (edPositionFilename, z, ' '); // read points from file
+	  //std::cout << "Added " << edList->GetSize() << " end devices from file.\n";
+	  edMobility.SetPositionAllocator (edList);
+  } else {
+	  Ptr<RandomRectanglePositionAllocator> edRandomPosition = CreateObject<RandomRectanglePositionAllocator>();
+	  //edRandomPosition->SetZ(z);
+
+	  Ptr<NormalRandomVariable> x = CreateObject<NormalRandomVariable> ();
+	  x->SetAttribute ("Variance", DoubleValue (bbox*bbox));
+	  //x->SetAttribute ("Bound", DoubleValue (bbox));
+	  //x->SetAttribute ("Min", DoubleValue (0));
+	  //x->SetAttribute ("Max", DoubleValue (bbox));
+	  edRandomPosition->SetX(x);
+
+	  Ptr<NormalRandomVariable> y = CreateObject<NormalRandomVariable> ();
+	  y->SetAttribute ("Variance", DoubleValue (bbox*bbox));
+	  //y->SetAttribute ("Bound", DoubleValue (bbox));
+	  //y->SetAttribute ("Min", DoubleValue (0));
+	  //y->SetAttribute ("Max", DoubleValue (bbox));
+	  edRandomPosition->SetY(y);
+
+	  //std::cout << "Added " << edRandomPosition->GetSize() << " from uniform distribution.\n";
+	  edMobility.SetPositionAllocator (edRandomPosition);
+  }
+
   edMobility.SetMobilityModel ("ns3::ConstantPositionMobilityModel");
 
   // Create a set of nodes
@@ -188,14 +209,6 @@ main (int argc, char *argv[])
   // Assign a mobility model to each node
   edMobility.Install (endDevices);
 
-//  // Make it so that nodes are at a certain height > 0
-//  for (NodeContainer::Iterator j = endDevices.Begin (); j != endDevices.End (); ++j)
-//    {
-//      Ptr<edMobilityModel> edMobility = (*j)->GetObject<edMobilityModel> ();
-//      Vector position = edMobility->GetPosition ();
-//      position.z = 1.2;
-//      edMobility->SetPosition (position);
-//    }
 
   // Create the LoraNetDevices of the end devices
   uint8_t nwkId = 54;
@@ -219,19 +232,20 @@ main (int argc, char *argv[])
       Ptr<LoraPhy> phy = loraNetDevice->GetPhy ();
     }
 
+
+
   /*********************
    *  Create Gateways  *
    *********************/
 
-
   // Create a UDC allocator for GW placement
   Ptr<UDCPositionAllocator> gwPosition = CreateObject<UDCPositionAllocator> ();
   gwPosition->SetSites (endDevices);
+  gwPosition->SetAlgorithm (algorithm);
   gwPosition->CoverSites (radius); // Coverage area assumed to be 10 km
   std::cout<<"Added "<< gwPosition->GetSitesN() << " positions to cover."<<std::endl;
   std::cout<<"Added "<< gwPosition->GetSize() << " gateways from UDC."<<std::endl;
 
-  gwPosition->Print ();
   // gwMobility
   MobilityHelper gwMobility;
   gwMobility.SetPositionAllocator (gwPosition);
@@ -261,7 +275,7 @@ main (int argc, char *argv[])
   double deltaX = 32;
   double yLength = 64;
   double deltaY = 17;
-  int radius = 1000;
+  //int radius = 20000;
 
   int gridWidth = 2 * radius / (xLength + deltaX);
   int gridHeight = 2 * radius / (yLength + deltaY);
@@ -321,12 +335,12 @@ main (int argc, char *argv[])
   Time appStopTime = Seconds (simulationTime);
   PeriodicSenderHelper appHelper = PeriodicSenderHelper ();
   appHelper.SetPeriod (Seconds (appPeriodSeconds));
-  appHelper.SetPacketSize (23);
+  appHelper.SetPacketSize (packetSize);
   Ptr<RandomVariableStream> rv = CreateObjectWithAttributes<UniformRandomVariable> (
-      "Min", DoubleValue (0), "Max", DoubleValue (10));
+      "Min", DoubleValue (0), "Max", DoubleValue (300));
   ApplicationContainer appContainer = appHelper.Install (endDevices);
 
-  appContainer.Start (Seconds (0));
+  appContainer.StartWithJitter (Seconds (0), rv);
   appContainer.Stop (appStopTime);
 
   /**************************
@@ -363,6 +377,8 @@ main (int argc, char *argv[])
 
   LoraPacketTracker &tracker = helper.GetPacketTracker ();
   std::cout << tracker.CountMacPacketsGlobally (Seconds (0), appStopTime + Hours (1)) << std::endl;
+
+  gwPosition->Print ();
 
   return 0;
 }

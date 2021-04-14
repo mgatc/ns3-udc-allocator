@@ -51,15 +51,22 @@ namespace ns3 {
 class UDCPositionAllocator : public PositionAllocator
 {
 public:
+   enum Algorithm {
+	   FAST_COVER = 0, SWEEP, STRIPS
+   };
    typedef CGAL::Exact_predicates_inexact_constructions_kernel Kernel;
-   typedef Kernel::Point_3 Point_3;
+   typedef Kernel::Point_3   Point_3;
+   typedef Kernel::Point_2   Point_2;
+   typedef Kernel::Segment_2 Segment_2;
 
   /**
    * Register this type with the TypeId system.
    * \return the object TypeId
    */
   static TypeId GetTypeId (void);
-  //UDCPositionAllocator(){}
+
+  void SetAlgorithm (int method);
+
   void SetSites (NodeContainer c);
 
   /**
@@ -70,9 +77,19 @@ public:
   void CoverSites (double radius);
 
   /**
-   * \brief Perform the Ghosh et al algorithm on the sites in the given allocator
+   * \brief Perform the Ghosh et al algorithm on the sites in the given node container
    */
-  void FastUDC (double radius);
+  void FastCover (double radius);
+
+  /**
+   * \brief Perform the Biniaz et al algorithm on the sites in the given node container
+   */
+  void BLMS (double radius);
+
+  /**
+   * \brief Perform the Liu-Li algorithm on the sites in the given node container
+   */
+  void LL (double radius);
 
   void Print ();
 
@@ -96,6 +113,7 @@ private:
   void Add (Vector v);
   double SquaredDistance (const Vector& l, const Vector& r);
 
+  Algorithm m_method = Algorithm(0); // set default to the first value given in the enum
   size_t m_maxCoverageSites = 50000;
   double m_defaultHeight = 1.2;
   double m_radius; //!< the radius of the unit disk (coverage area)
