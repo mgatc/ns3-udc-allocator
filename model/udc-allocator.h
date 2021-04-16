@@ -76,21 +76,6 @@ public:
    */
   void CoverSites (double radius);
 
-  /**
-   * \brief Perform the Ghosh et al algorithm on the sites in the given node container
-   */
-  void FastCover (double radius);
-
-  /**
-   * \brief Perform the Biniaz et al algorithm on the sites in the given node container
-   */
-  void BLMS (double radius);
-
-  /**
-   * \brief Perform the Liu-Li algorithm on the sites in the given node container
-   */
-  void LL (double radius);
-
   void Print ();
 
   /**
@@ -105,6 +90,21 @@ public:
   virtual Vector GetNext (void) const;
   virtual int64_t AssignStreams (int64_t stream);
 private:
+
+  /**
+   * \brief Perform the Ghosh et al algorithm on the sites in the given node container
+   */
+  void FastCover (double radius);
+
+  /**
+   * \brief Perform the Biniaz et al algorithm on the sites in the given node container
+   */
+  void BLMS (double radius);
+
+  /**
+   * \brief Perform the Liu-Li algorithm on the sites in the given node container
+   */
+  void LL (double radius);
 
   /**
    * \brief Add a position to the list of positions

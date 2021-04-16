@@ -363,6 +363,9 @@ main (int argc, char *argv[])
   // Simulation //
   ////////////////
 
+
+  gwPosition->Print ();
+
   Simulator::Stop (appStopTime + Hours (1));
 
   NS_LOG_INFO ("Running simulation...");
@@ -378,7 +381,6 @@ main (int argc, char *argv[])
   LoraPacketTracker &tracker = helper.GetPacketTracker ();
   std::cout << tracker.CountMacPacketsGlobally (Seconds (0), appStopTime + Hours (1)) << std::endl;
 
-  gwPosition->Print ();
 
   return 0;
 }

@@ -431,17 +431,17 @@ UDCPositionAllocator::Print()
 
     const double RadiusOfPoints = 0.005*ResultantDimension;
 
+    // Print coverage disks
     for(Vector p : m_positions){
-        //fprintf (fp, "\\draw [fill=red,stroke=red] (%f,%f) circle [radius=%f];\n",
-    	//        p.x, p.y, RadiusOfPoints);
         fprintf (fp, "\\draw [color=red!60, fill=red, fill opacity=0.05](%f,%f) circle [radius=%f];\n",
         		 p.x*ResizeFactor, p.y*ResizeFactor, m_radius*ResizeFactor);
     }
-
+    // Print sites
     for(Vector p : m_sites)
         fprintf (fp, "\\draw [color=blue, fill=blue!63] (%f,%f) circle [radius=%f];\n",
         		p.x*ResizeFactor, p.y*ResizeFactor, RadiusOfPoints);
 
+    // Draw scale
     double scaleStartX = (m_bounds[1].x - 2*m_radius)*ResizeFactor,
     	   scaleLabelX = scaleStartX + m_radius*ResizeFactor,
     	   scaleEndX   = scaleLabelX + m_radius*ResizeFactor,
