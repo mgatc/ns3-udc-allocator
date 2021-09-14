@@ -15,8 +15,7 @@ def configure(conf):
 def build(bld):
     module = bld.create_ns3_module('udc-allocator', ['core','mobility'])
     module.source = [
-        'model/udc-allocator.cc',
-        'helper/udc-allocator-helper.cc',
+        'model/udc-allocator.cc'
         ]
     # include CGAL and dependencies... gmp, mpfr, boost_system, boost_thread
     module.use.append('gmp')
@@ -27,14 +26,12 @@ def build(bld):
 
     module_test = bld.create_ns3_module_test_library('udc-allocator')
     module_test.source = [
-        'test/udc-allocator-test-suite.cc',
         ]
 
     headers = bld(features='ns3header')
     headers.module = 'udc-allocator'
     headers.source = [
-        'model/udc-allocator.h',
-        'helper/udc-allocator-helper.h',
+        'model/udc-allocator.h'
         ]
       
 
